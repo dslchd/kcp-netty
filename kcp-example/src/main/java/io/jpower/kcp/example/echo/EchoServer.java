@@ -36,11 +36,11 @@ public final class EchoServer {
                         }
                     });
             ChannelOptionHelper.nodelay(b, true, 20, 2, true)
-                    .childOption(UkcpChannelOption.UKCP_MTU, 512);
-
+                    .childOption(UkcpChannelOption.UKCP_MTU, 512)
+                    .childOption(UkcpChannelOption.UKCP_AUTO_SET_CONV,true);
             // Start the server.
-            ChannelFuture f = b.bind(PORT).sync();
-
+            ChannelFuture f = b.bind(PORT);
+            System.out.println("KCP服务器已经启动");
             // Wait until the server socket is closed.
             f.channel().closeFuture().sync();
         } finally {

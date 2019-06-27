@@ -13,29 +13,30 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
  */
 public class EchoClientHandler extends ChannelInboundHandlerAdapter {
 
-    private final ByteBuf firstMessage;
 
     /**
      * Creates a client-side handler.
      */
     public EchoClientHandler() {
-        firstMessage = Unpooled.buffer(EchoClient.SIZE);
-        for (int i = 0; i < firstMessage.capacity(); i++) {
-            firstMessage.writeByte((byte) i);
-        }
     }
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
         UkcpChannel kcpCh = (UkcpChannel) ctx.channel();
         kcpCh.conv(EchoClient.CONV); // set conv
-
+        //建立链接的时候 向服务器发送一个hello
+        ByteBuf firstMessage=Unpooled.copiedBuffer("hello".getBytes());
         ctx.writeAndFlush(firstMessage);
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        ctx.write(msg);
+        if (msg instanceof ByteBuf){
+            ByteBuf buf= (ByteBuf) msg;
+            byte[] byteArrays=new byte[buf.capacity()];
+            buf.readBytes(byteArrays);
+            System.out.println("收到Server消息:"+new String(byteArrays));
+        }
     }
 
     @Override
