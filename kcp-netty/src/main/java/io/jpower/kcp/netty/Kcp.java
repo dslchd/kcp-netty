@@ -232,6 +232,7 @@ public class Kcp {
         return buf.writerIndex() - offset;
     }
 
+    // kcp 分片
     private static class Segment {
 
         private final Recycler.Handle<Segment> recyclerHandle;
@@ -490,82 +491,94 @@ public class Kcp {
         return true;
     }
 
-    public int send1(ByteBuf buf) {
-        assert mss > 0;
+//    public int send1(ByteBuf buf) {
+//        assert mss > 0;
+//
+//        int len = buf.readableBytes();
+//        if (len == 0) {
+//            return -1;
+//        }
+//
+//        // append to previous segment in streaming mode (if possible)
+//        if (stream) {
+//            if (!sndQueue.isEmpty()) {
+//                Segment last = sndQueue.peekLast();
+//                ByteBuf lastData = last.data;
+//                int lastLen = lastData.readableBytes();
+//                if (lastLen < mss) {
+//                    int capacity = mss - lastLen;
+//                    int extend = len < capacity ? len : capacity;
+//                    if (lastData.maxWritableBytes() < extend) { // extend
+//                        ByteBuf newBuf = byteBufAllocator.ioBuffer(lastLen + extend);
+//                        newBuf.writeBytes(lastData);
+//                        lastData.release();
+//                        lastData = last.data = newBuf;
+//                    }
+//                    lastData.writeBytes(buf, extend);
+//
+//                    len = buf.readableBytes();
+//                    if (len == 0) {
+//                        return 0;
+//                    }
+//                }
+//            }
+//        }
+//
+//        int count = 0;
+//        if (len <= mss) {
+//            count = 1;
+//        } else {
+//            count = (len + mss - 1) / mss;
+//        }
+//
+//        if (count > 255) { // Maybe don't need the conditon in stream mode
+//            return -2;
+//        }
+//
+//        if (count == 0) { // impossible
+//            count = 1;
+//        }
+//
+//        // fragment
+//        for (int i = 0; i < count; i++) {
+//            int size = len > mss ? mss : len;
+//            Segment seg = Segment.createSegment(byteBufAllocator, size);
+//            seg.data.writeBytes(buf, size);
+//            seg.frg = (short) (stream ? 0 : count - i - 1);
+//            sndQueue.add(seg);
+//            len = buf.readableBytes();
+//        }
+//
+//        return 0;
+//    }
 
-        int len = buf.readableBytes();
-        if (len == 0) {
-            return -1;
-        }
-
-        // append to previous segment in streaming mode (if possible)
-        if (stream) {
-            if (!sndQueue.isEmpty()) {
-                Segment last = sndQueue.peekLast();
-                ByteBuf lastData = last.data;
-                int lastLen = lastData.readableBytes();
-                if (lastLen < mss) {
-                    int capacity = mss - lastLen;
-                    int extend = len < capacity ? len : capacity;
-                    if (lastData.maxWritableBytes() < extend) { // extend
-                        ByteBuf newBuf = byteBufAllocator.ioBuffer(lastLen + extend);
-                        newBuf.writeBytes(lastData);
-                        lastData.release();
-                        lastData = last.data = newBuf;
-                    }
-                    lastData.writeBytes(buf, extend);
-
-                    len = buf.readableBytes();
-                    if (len == 0) {
-                        return 0;
-                    }
-                }
-            }
-        }
-
-        int count = 0;
-        if (len <= mss) {
-            count = 1;
-        } else {
-            count = (len + mss - 1) / mss;
-        }
-
-        if (count > 255) { // Maybe don't need the conditon in stream mode
-            return -2;
-        }
-
-        if (count == 0) { // impossible
-            count = 1;
-        }
-
-        // fragment
-        for (int i = 0; i < count; i++) {
-            int size = len > mss ? mss : len;
-            Segment seg = Segment.createSegment(byteBufAllocator, size);
-            seg.data.writeBytes(buf, size);
-            seg.frg = (short) (stream ? 0 : count - i - 1);
-            sndQueue.add(seg);
-            len = buf.readableBytes();
-        }
-
-        return 0;
-    }
-
+    /**
+     * kcp 发送
+     * @param buf {@link ByteBuf} 发送缓冲ByteBuf
+     * @return int 类型的标识
+     */
     public int send(ByteBuf buf) {
         assert mss > 0;
 
+        //获取可读字节长度
         int len = buf.readableBytes();
         if (len == 0) {
             return -1;
         }
 
         // append to previous segment in streaming mode (if possible)
+        // stream 流模式的处理方式
         if (stream) {
             if (!sndQueue.isEmpty()) {
+                //出栈list最后一个元素，但不移除它
                 Segment last = sndQueue.peekLast();
                 ByteBuf lastData = last.data;
+                // last segment 可读字节长度
                 int lastLen = lastData.readableBytes();
+                // stream 流模式会检测每个发送队列里的分片是否达到最大MSS，如果没有达到就会用新的数据填充分片
+                // mss:可理解为kcp segment(最大的分片大小) 业务数据最大长度 mss=mtu-kcp_overhead
                 if (lastLen < mss) {
+                    // TODO 待理解
                     int capacity = mss - lastLen;
                     int extend = len < capacity ? len : capacity;
                     if (lastData.maxWritableBytes() < extend) { // extend
@@ -583,9 +596,11 @@ public class Kcp {
                 }
             }
         }
-
+        // 消息模式
         int count = 0;
+        // 根据len计算出需要多少个分片
         if (len <= mss) {
+            // 待发送字节长度在 最大分片mss 内
             count = 1;
         } else {
             count = (len + mss - 1) / mss;
@@ -601,13 +616,16 @@ public class Kcp {
 
         // segment
         for (int i = 0; i < count; i++) {
+            //获取当前分片的长度
             int size = len > mss ? mss : len;
             Segment seg = Segment.createSegment(buf.readRetainedSlice(size));
+            //得到分片序号 如果count=3 表示为3个分片 那么依次的分片序号为 2,1,0
             seg.frg = (short) (stream ? 0 : count - i - 1);
+            //添加到发送队列里
             sndQueue.add(seg);
             len = buf.readableBytes();
         }
-
+        // 正常情况返回0
         return 0;
     }
 
@@ -758,162 +776,168 @@ public class Kcp {
         }
     }
 
-    private int input1(ByteBuf data) {
-        long oldSndUna = sndUna;
-        long maxack = 0;
-        boolean flag = false;
+//    private int input1(ByteBuf data) {
+//        long oldSndUna = sndUna;
+//        long maxack = 0;
+//        boolean flag = false;
+//
+//        if (log.isDebugEnabled()) {
+//            log.debug("{} [RI] {} bytes", this, data.readableBytes());
+//        }
+//
+//        if (data == null || data.readableBytes() < IKCP_OVERHEAD) {
+//            return -1;
+//        }
+//
+//        while (true) {
+//            int conv, len, wnd;
+//            long ts, sn, una;
+//            byte cmd;
+//            short frg;
+//            Segment seg;
+//
+//            if (data.readableBytes() < IKCP_OVERHEAD) {
+//                break;
+//            }
+//
+//            conv = data.readIntLE();
+//            if (conv != this.conv && !(this.conv == 0 && autoSetConv)) {
+//                return -4;
+//            }
+//
+//            cmd = data.readByte();
+//            frg = data.readUnsignedByte();
+//            wnd = data.readUnsignedShortLE();
+//            ts = data.readUnsignedIntLE();
+//            sn = data.readUnsignedIntLE();
+//            una = data.readUnsignedIntLE();
+//            len = data.readIntLE();
+//
+//            if (data.readableBytes() < len) {
+//                return -2;
+//            }
+//
+//            if (cmd != IKCP_CMD_PUSH && cmd != IKCP_CMD_ACK && cmd != IKCP_CMD_WASK && cmd != IKCP_CMD_WINS) {
+//                return -3;
+//            }
+//
+//            if (this.conv == 0 && autoSetConv) { // automatically set conv
+//                this.conv = conv;
+//            }
+//
+//            this.rmtWnd = wnd;
+//            parseUna(una);
+//            shrinkBuf();
+//
+//            boolean readed = false;
+//            long uintCurrent = long2Uint(current);
+//            switch (cmd) {
+//                case IKCP_CMD_ACK: {
+//                    int rtt = itimediff(uintCurrent, ts);
+//                    if (rtt >= 0) {
+//                        updateAck(rtt);
+//                    }
+//                    parseAck(sn);
+//                    shrinkBuf();
+//                    if (!flag) {
+//                        flag = true;
+//                        maxack = sn;
+//                    } else {
+//                        if (itimediff(sn, maxack) > 0) {
+//                            maxack = sn;
+//                        }
+//                    }
+//                    if (log.isDebugEnabled()) {
+//                        log.debug("{} input ack: sn={}, rtt={}, rto={}", this, sn, rtt, rxRto);
+//                    }
+//                    break;
+//                }
+//                case IKCP_CMD_PUSH: {
+//                    if (itimediff(sn, rcvNxt + rcvWnd) < 0) {
+//                        ackPush(sn, ts);
+//                        if (itimediff(sn, rcvNxt) >= 0) {
+//                            seg = Segment.createSegment(byteBufAllocator, len);
+//                            seg.conv = conv;
+//                            seg.cmd = cmd;
+//                            seg.frg = frg;
+//                            seg.wnd = wnd;
+//                            seg.ts = ts;
+//                            seg.sn = sn;
+//                            seg.una = una;
+//
+//                            if (len > 0) {
+//                                seg.data.writeBytes(data, len);
+//                                readed = true;
+//                            }
+//
+//                            parseData(seg);
+//                        }
+//                    }
+//                    if (log.isDebugEnabled()) {
+//                        log.debug("{} input push: sn={}, una={}, ts={}", this, sn, una, ts);
+//                    }
+//                    break;
+//                }
+//                case IKCP_CMD_WASK: {
+//                    // ready to send back IKCP_CMD_WINS in ikcp_flush
+//                    // tell remote my window size
+//                    probe |= IKCP_ASK_TELL;
+//                    if (log.isDebugEnabled()) {
+//                        log.debug("{} input ask", this);
+//                    }
+//                    break;
+//                }
+//                case IKCP_CMD_WINS: {
+//                    // do nothing
+//                    if (log.isDebugEnabled()) {
+//                        log.debug("{} input tell: {}", this, wnd);
+//                    }
+//                    break;
+//                }
+//                default:
+//                    return -3;
+//            }
+//
+//            if (!readed) {
+//                data.skipBytes(len);
+//            }
+//        }
+//
+//        if (flag) {
+//            parseFastack(maxack);
+//        }
+//
+//        if (itimediff(sndUna, oldSndUna) > 0) {
+//            if (cwnd < rmtWnd) {
+//                int mss = this.mss;
+//                if (cwnd < ssthresh) {
+//                    cwnd++;
+//                    incr += mss;
+//                } else {
+//                    if (incr < mss) {
+//                        incr = mss;
+//                    }
+//                    incr += (mss * mss) / incr + (mss / 16);
+//                    if ((cwnd + 1) * mss <= incr) {
+//                        cwnd++;
+//                    }
+//                }
+//                if (cwnd > rmtWnd) {
+//                    cwnd = rmtWnd;
+//                    incr = rmtWnd * mss;
+//                }
+//            }
+//        }
+//
+//        return 0;
+//    }
 
-        if (log.isDebugEnabled()) {
-            log.debug("{} [RI] {} bytes", this, data.readableBytes());
-        }
-
-        if (data == null || data.readableBytes() < IKCP_OVERHEAD) {
-            return -1;
-        }
-
-        while (true) {
-            int conv, len, wnd;
-            long ts, sn, una;
-            byte cmd;
-            short frg;
-            Segment seg;
-
-            if (data.readableBytes() < IKCP_OVERHEAD) {
-                break;
-            }
-
-            conv = data.readIntLE();
-            if (conv != this.conv && !(this.conv == 0 && autoSetConv)) {
-                return -4;
-            }
-
-            cmd = data.readByte();
-            frg = data.readUnsignedByte();
-            wnd = data.readUnsignedShortLE();
-            ts = data.readUnsignedIntLE();
-            sn = data.readUnsignedIntLE();
-            una = data.readUnsignedIntLE();
-            len = data.readIntLE();
-
-            if (data.readableBytes() < len) {
-                return -2;
-            }
-
-            if (cmd != IKCP_CMD_PUSH && cmd != IKCP_CMD_ACK && cmd != IKCP_CMD_WASK && cmd != IKCP_CMD_WINS) {
-                return -3;
-            }
-
-            if (this.conv == 0 && autoSetConv) { // automatically set conv
-                this.conv = conv;
-            }
-
-            this.rmtWnd = wnd;
-            parseUna(una);
-            shrinkBuf();
-
-            boolean readed = false;
-            long uintCurrent = long2Uint(current);
-            switch (cmd) {
-                case IKCP_CMD_ACK: {
-                    int rtt = itimediff(uintCurrent, ts);
-                    if (rtt >= 0) {
-                        updateAck(rtt);
-                    }
-                    parseAck(sn);
-                    shrinkBuf();
-                    if (!flag) {
-                        flag = true;
-                        maxack = sn;
-                    } else {
-                        if (itimediff(sn, maxack) > 0) {
-                            maxack = sn;
-                        }
-                    }
-                    if (log.isDebugEnabled()) {
-                        log.debug("{} input ack: sn={}, rtt={}, rto={}", this, sn, rtt, rxRto);
-                    }
-                    break;
-                }
-                case IKCP_CMD_PUSH: {
-                    if (itimediff(sn, rcvNxt + rcvWnd) < 0) {
-                        ackPush(sn, ts);
-                        if (itimediff(sn, rcvNxt) >= 0) {
-                            seg = Segment.createSegment(byteBufAllocator, len);
-                            seg.conv = conv;
-                            seg.cmd = cmd;
-                            seg.frg = frg;
-                            seg.wnd = wnd;
-                            seg.ts = ts;
-                            seg.sn = sn;
-                            seg.una = una;
-
-                            if (len > 0) {
-                                seg.data.writeBytes(data, len);
-                                readed = true;
-                            }
-
-                            parseData(seg);
-                        }
-                    }
-                    if (log.isDebugEnabled()) {
-                        log.debug("{} input push: sn={}, una={}, ts={}", this, sn, una, ts);
-                    }
-                    break;
-                }
-                case IKCP_CMD_WASK: {
-                    // ready to send back IKCP_CMD_WINS in ikcp_flush
-                    // tell remote my window size
-                    probe |= IKCP_ASK_TELL;
-                    if (log.isDebugEnabled()) {
-                        log.debug("{} input ask", this);
-                    }
-                    break;
-                }
-                case IKCP_CMD_WINS: {
-                    // do nothing
-                    if (log.isDebugEnabled()) {
-                        log.debug("{} input tell: {}", this, wnd);
-                    }
-                    break;
-                }
-                default:
-                    return -3;
-            }
-
-            if (!readed) {
-                data.skipBytes(len);
-            }
-        }
-
-        if (flag) {
-            parseFastack(maxack);
-        }
-
-        if (itimediff(sndUna, oldSndUna) > 0) {
-            if (cwnd < rmtWnd) {
-                int mss = this.mss;
-                if (cwnd < ssthresh) {
-                    cwnd++;
-                    incr += mss;
-                } else {
-                    if (incr < mss) {
-                        incr = mss;
-                    }
-                    incr += (mss * mss) / incr + (mss / 16);
-                    if ((cwnd + 1) * mss <= incr) {
-                        cwnd++;
-                    }
-                }
-                if (cwnd > rmtWnd) {
-                    cwnd = rmtWnd;
-                    incr = rmtWnd * mss;
-                }
-            }
-        }
-
-        return 0;
-    }
-
+    /**
+     * kcp 收到下层协议UDP传过来的 </br>
+     * 将ByteBuf转成kcp数据包格式，KCP报文分为ACK报文、数据报文、探测窗口报文、响应窗口报文四种
+     * @param data {@link ByteBuf} 底层过来的数据
+     * @return 标识
+     */
     public int input(ByteBuf data) {
         long oldSndUna = sndUna;
         long maxack = 0;
@@ -971,6 +995,7 @@ public class Kcp {
             long uintCurrent = long2Uint(current);
             switch (cmd) {
                 case IKCP_CMD_ACK: {
+                    //ACK报文
                     int rtt = itimediff(uintCurrent, ts);
                     if (rtt >= 0) {
                         updateAck(rtt);
@@ -991,6 +1016,7 @@ public class Kcp {
                     break;
                 }
                 case IKCP_CMD_PUSH: {
+                    //数据报文
                     if (itimediff(sn, rcvNxt + rcvWnd) < 0) {
                         ackPush(sn, ts);
                         if (itimediff(sn, rcvNxt) >= 0) {
@@ -1017,6 +1043,7 @@ public class Kcp {
                     break;
                 }
                 case IKCP_CMD_WASK: {
+                    // 探测窗口报文
                     // ready to send back IKCP_CMD_WINS in ikcp_flush
                     // tell remote my window size
                     probe |= IKCP_ASK_TELL;
@@ -1026,6 +1053,7 @@ public class Kcp {
                     break;
                 }
                 case IKCP_CMD_WINS: {
+                    //响应窗口报文
                     // do nothing
                     if (log.isDebugEnabled()) {
                         log.debug("{} input tell: {}", this, wnd);
@@ -1118,9 +1146,13 @@ public class Kcp {
         ackcount = 0;
 
         // probe window size (if remote window size equals zero)
+        //远端接收窗口大小为0的时候
         if (rmtWnd == 0) {
+            //探查窗口需要等待的时间为0
             if (probeWait == 0) {
+                //设置探查窗口需要等待的时间
                 probeWait = IKCP_PROBE_INIT;
+                //设置下次探查窗口的时间戳 = 当前时间 + 探查窗口等待时间间隔
                 tsProbe = current + probeWait;
             } else {
                 if (itimediff(current, tsProbe) >= 0) {
