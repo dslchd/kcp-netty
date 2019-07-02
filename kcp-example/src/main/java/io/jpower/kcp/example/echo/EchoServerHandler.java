@@ -1,7 +1,7 @@
 package io.jpower.kcp.example.echo;
 
-import io.jpower.kcp.netty.UkcpChannel;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 
@@ -14,20 +14,22 @@ public class EchoServerHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        System.out.println("通道已激活");
+        System.out.println("通道已激活:"+ctx.toString());
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        String message="";
         if (msg instanceof ByteBuf){
             ByteBuf buf= (ByteBuf) msg;
             byte [] byteArray=new byte[buf.capacity()];
             buf.readBytes(byteArray);
-            message=new String(byteArray);
+            String message=new String(byteArray);
             System.out.println("收到Client消息:"+message);
+            //组装新ByteBuf
+            String resp="Hello Client";
+            ByteBuf resBuf= Unpooled.copiedBuffer(resp.getBytes());
+            ctx.writeAndFlush(resBuf);
         }
-        ctx.write("Server Say:"+message);
     }
 
     @Override
